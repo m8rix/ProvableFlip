@@ -1,10 +1,17 @@
 pragma solidity 0.5.12;
+import "./Ownable.sol";
 import "./Testable.sol";
+import "./provableAPI.sol";
 
-contract CoinFlip is Testable {
+contract CoinFlip is Ownable, Testable, usingProvable {
 	uint public contractBalance;
 
-	mapping (address => uint) private stakings;
+	struct Bet {
+		address player;
+		uint256 value;
+	}
+
+	mapping (bytes32 => Bet) private waiting;
 
 	modifier betCovered(){
 		require(msg.value < contractBalance);
@@ -16,24 +23,63 @@ contract CoinFlip is Testable {
 		_;
 	}
 
-    event flipResult(address player, bool result);
+	event flipResult(address player, bool result);
 
 	function flip() public payable minimumBet(1 szabo) betCovered {
-		uint winning = block_time() % 2;
-		if(winning == 1) {
-			uint total = (msg.value * 2);
-			uint house = (total * 1) / 100;
+		bytes32 queryId;
 
-			msg.sender.transfer(total - house);
-			contractBalance -= (msg.value - house);
+		if (testing) {
+			queryId = testRandom();
 		} else {
-			contractBalance += msg.value;
+			queryId = getRandom();
 		}
-		emit flipResult(msg.sender, winning == 1);
+
+		Bet memory bet;
+		bet.player = msg.sender;
+		bet.value = msg.value;
+		waiting[queryId] = bet;
 	}
 
 	function stake() public payable {
 		contractBalance += msg.value;
-		stakings[msg.sender] += msg.value;
+	}
+
+	uint256 constant NUM_RANDOM_BYTES_REQUESTED = 1;
+
+	function getRandom() internal returns (bytes32) {
+		uint256 QUERY_EXECUTION_DELAY = 0;
+		uint256 GAS_FOR_CALLBACK = 200000;
+		return provable_newRandomDSQuery(
+			QUERY_EXECUTION_DELAY,
+			NUM_RANDOM_BYTES_REQUESTED,
+			GAS_FOR_CALLBACK
+		);
+	}
+
+	function testRandom() internal returns (bytes32) {
+		bytes32 queryId = bytes32(keccak256(abi.encodePacked(msg.sender)));
+		uint rand = block_time() % 2;
+		string memory result = rand == 1 ? '1' : '0';
+
+		__callback(queryId, result, bytes(abi.encodePacked(msg.sender)));
+		return queryId;
+	}
+
+	function __callback(bytes32 _queryId, string memory _result, bytes memory _proof) public {
+		uint256 random = uint256(keccak256(abi.encodePacked(_result))) % 2;
+	
+		if(random == 1) {
+			address(uint160(waiting[_queryId].player)).transfer(waiting[_queryId].value * 2);
+			contractBalance -= waiting[_queryId].value;
+		} else {
+			contractBalance += waiting[_queryId].value;
+		}
+
+		emit flipResult(waiting[_queryId].player, random == 1);
+		delete waiting[_queryId];
+	}
+
+	function destroyContract() public onlyOwner{
+		selfdestruct(msg.sender);
 	}
 }

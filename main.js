@@ -1,35 +1,60 @@
 var web3 = new Web3(Web3.givenProvider);
 var contractInstance;
-var accounts
+var contractOwner;
 
 $(document).ready(function(){
-	// This is non-production code, pulling in the build file makes local dev with truffle smoother
 	$.getJSON('./ethereum/build/contracts/CoinFlip.json', function(coinFlipBuild){
 		window.ethereum.enable().then(function(accounts){
-			contractInstance = getContract(coinFlipBuild, accounts[0]);
-			// contractInstance = new web3.eth.Contract(coinFlipBuild.abi, coinFlipBuild.networks[network_id].address, {from: accounts[0]});
 
-			setWalletBalance(accounts[0]);
-			setDefaults(accounts[0]);
+			web3.eth.net.getId().then(netId => {
+				setContract(coinFlipBuild, netId, accounts[0]);
+			}).then(function(){
 
-			// Listen for flip results
-			contractInstance.events.flipResult({filter: {address: accounts[0]}}, async function(error, event){
-				flipResult(error, event);
-			})
+				contractInstance.events.flipResult({filter: {address: accounts[0]}}, async function(error, event){
+					flipResult(error, event);
+				});
 
+				contractInstance.events.proveRandomness(async function(error, event){
+					console.log(event.returnValues);
+				});
+
+				setOwner(accounts[0]);
+			});
+
+			setAccount(accounts[0]);
+
+	 		window.ethereum.on('accountsChanged', function() {
+	 			setAccount(window.ethereum.selectedAddress);
+	 			setOwner(window.ethereum.selectedAddress);
+	 		});
 		});
 		$("#gamble_button").click(coinFlip);
+		$("#stake_button").click(donateFunds);
+		$("#destroy_button").click(destroyContract);
 	});
 });
 
-function getContract(build, account){
-	var network_id = Object.keys(build.networks)[0];       
-
-	return new web3.eth.Contract(
+function setContract(build, netId, account){
+	this.contractInstance = new web3.eth.Contract(
 		build.abi,
-		build.networks[network_id].address,
+		build.networks[netId].address,
 		{from: account}
 	)
+}
+
+function setOwner(account){
+	this.contractInstance.methods.owner().call().then(contractOwner => {
+		if (account.toLowerCase() == contractOwner.toLowerCase()) {
+			$("#destroy_button").show();
+		} else {
+			$("#destroy_button").hide();
+		}
+	});
+}
+
+function setAccount(account){
+	setWalletBalance(account);
+	setDefaults(account);
 }
 
 function coinFlip(){
@@ -40,6 +65,19 @@ function coinFlip(){
 			value: web3.utils.toWei(amount, "ether")
 		}
 	);
+}
+
+function donateFunds(){
+	var amount = document.getElementById("rangeValue").innerHTML;
+	contractInstance.methods.stake().send(
+		{
+			value: web3.utils.toWei(amount, "ether")
+		}
+	);
+}
+
+function destroyContract(){
+	contractInstance.methods.destroyContract().send();
 }
 
 function flipResult(error, event){
@@ -55,8 +93,10 @@ function flipResult(error, event){
 function toggleButtonFunction() {
 	if (document.getElementById("rangeValue").innerHTML != "0.00"){
 		$("#gamble_button").removeAttr('disabled');
+		$("#stake_button").removeAttr('disabled');
 	} else {
 		$("#gamble_button").attr("disabled", true);
+		$("#stake_button").attr("disabled", true);
 	}
 }
 
